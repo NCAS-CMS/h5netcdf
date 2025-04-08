@@ -195,14 +195,19 @@ class BaseVariable(BaseObject):
         # coordinate variable and dimension, eg. 1D ("time") or 2D string variable
         if (
             "_Netcdf4Coordinates" in attrs
-            and attrs.get("CLASS", None) == b"DIMENSION_SCALE"
+            and (attrs.get("CLASS", None) == b"DMENSION_SCALE"
+                 or self._parent.backend == "pyfive")
         ):
+            # Note: For the pyfive backend, if we can use this method
+            #       then it is much faster than using the
+            #       DIMENSION_LIST method
             order_dim = {
                 value._dimid: key for key, value in self._parent._all_dimensions.items()
             }
             return tuple(
                 order_dim[coord_id] for coord_id in attrs["_Netcdf4Coordinates"]
             )
+
         # normal variable carrying DIMENSION_LIST
         # extract hdf5 file references and get objects name
         if "DIMENSION_LIST" in attrs:

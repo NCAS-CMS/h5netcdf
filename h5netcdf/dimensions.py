@@ -105,17 +105,23 @@ class Dimension:
     @property
     def size(self):
         """Return dimension size."""
-        size = len(self)
-        if self.isunlimited():
-            # return actual dimensions sizes, this is in line with netcdf4-python
-            # get sizes from all connected variables and calculate max
-            # because netcdf unlimited dimensions can be any length
-            # but connected variables dimensions can have a certain larger length.
-            reflist = self._h5ds.attrs.get("REFERENCE_LIST", None)
-            if reflist is not None:
-                for ref, axis in reflist:
-                    var = self._parent._h5group["/"][ref]
-                    size = max(var.shape[axis], size)
+        try:
+            size = self._cached_size
+        except AttributeError:
+            size = len(self)
+            if not self.isunlimited():
+                self._cached_size = size
+            else:                
+                # return actual dimensions sizes, this is in line with netcdf4-python
+                # get sizes from all connected variables and calculate max
+                # because netcdf unlimited dimensions can be any length
+                # but connected variables dimensions can have a certain larger length.
+                reflist = self._h5ds.attrs.get("REFERENCE_LIST", None)
+                if reflist is not None:
+                    for ref, axis in reflist:
+                        var = self._parent._h5group["/"][ref]
+                        size = max(var.shape[axis], size)
+                
         return size
 
     def group(self):
@@ -124,9 +130,15 @@ class Dimension:
 
     def isunlimited(self):
         """Return ``True`` if dimension is unlimited, otherwise ``False``."""
-        if self._phony:
-            return False
-        return self._h5ds.maxshape == (None,)
+        try:
+            return self._cached_isunlimited
+        except AttributeError:
+            if self._phony:
+                return False
+
+            isunlimited = self._h5ds.maxshape == (None,)
+            self._cached_isunlimited = isunlimited
+            return isunlimited
 
     @property
     def _h5ds(self):
