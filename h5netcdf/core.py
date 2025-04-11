@@ -140,6 +140,13 @@ class BaseObject:
     def _h5ds(self):
         # Always refer to the root file and store not h5py object
         # subclasses:
+#        print('arse',self._parent.backend == "pyfive")
+ #       if self._parent.backend == "pyfive":
+  #          
+  #          h5ds = self._root._h5file[self._h5path]
+  #      else:
+  #          h5ds = self._root._h5file[self._h5path]
+            
         return self._root._h5file[self._h5path]
 
     @property
@@ -191,30 +198,50 @@ class BaseVariable(BaseObject):
         return super().name.replace("_nc4_non_coord_", "")
 
     def _lookup_dimensions(self):
-        attrs = self._h5ds.attrs
+        # Use cached attributes, if available.
+        try:
+            attrs = self._attrs
+            print ('cached_attrs')
+        except AttributeError:
+            attrs = self._h5ds.attrs
+            print ('BAD attr;')
+            
         # coordinate variable and dimension, eg. 1D ("time") or 2D string variable
+        print ('getting dimes')
         if (
             "_Netcdf4Coordinates" in attrs
             and (attrs.get("CLASS", None) == b"DMENSION_SCALE"
                  or self._parent.backend == "pyfive")
         ):
-            # Note: For the pyfive backend, if we can use this method
-            #       then it is much faster than using the
-            #       DIMENSION_LIST method
-            order_dim = {
-                value._dimid: key for key, value in self._parent._all_dimensions.items()
-            }
+            # Note: For the pyfive backend, if "_Netcdf4Coordinates"
+            #       exist then we should use this method as it is much
+            #       faster than using the DIMENSION_LIST method
+
+            # Use cached order_dims, if available.
+            try:
+                order_dim = self._parent._order_dim
+                print ('cached_order_dim')
+            except AttributeError:
+                print (22222000, list(self._parent._all_dimensions))
+                print ('------')
+                order_dim = {
+                    value._dimid: key for key, value in self._parent._all_dimensions.items()
+                }
+                print (22222)
+                self._parent._order_dim = order_dim
+            print (11111)
             return tuple(
                 order_dim[coord_id] for coord_id in attrs["_Netcdf4Coordinates"]
             )
 
         # normal variable carrying DIMENSION_LIST
         # extract hdf5 file references and get objects name
-        if "DIMENSION_LIST" in attrs:
+        if "DIMENSION_LIST" in attrs:            
             # check if malformed variable and raise
             if _unlabeled_dimension_mix(self._h5ds) == "labeled":
                 # If a dimension has attached more than one scale for some reason, then
                 # take the last one. This is in line with netcdf-c and netcdf4-python.
+                print ('w/. LIST')
                 return tuple(
                     self._root._h5file[ref[-1]].name.split("/")[-1]
                     for ref in list(self._h5ds.attrs.get("DIMENSION_LIST", []))

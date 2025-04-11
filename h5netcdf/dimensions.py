@@ -152,9 +152,20 @@ class Dimension:
 
     @property
     def _dimid(self):
-        if self._phony:
-            return False
-        return self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
+#        if self._phony:
+#            return False
+#        return self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
+        try:
+            return self._cached_dimid
+        except AttributeError:
+            if self._phony:
+                dimid =  False
+            else:
+                dimid = self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
+            print ('caching')
+            self._cached_dimid = dimid
+            return dimid
+            
 
     def _resize(self, size):
         from .legacyapi import Dataset
