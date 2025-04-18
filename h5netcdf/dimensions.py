@@ -156,13 +156,15 @@ class Dimension:
 #            return False
 #        return self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
         try:
-            return self._cached_dimid
+            x =  self._cached_dimid
+            print ('using cached _dimid')
+            return x
         except AttributeError:
             if self._phony:
                 dimid =  False
             else:
                 dimid = self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
-            print ('caching')
+            print ('caching _dimid')
             self._cached_dimid = dimid
             return dimid
             

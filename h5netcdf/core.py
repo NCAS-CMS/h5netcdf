@@ -140,14 +140,13 @@ class BaseObject:
     def _h5ds(self):
         # Always refer to the root file and store not h5py object
         # subclasses:
-#        print('arse',self._parent.backend == "pyfive")
- #       if self._parent.backend == "pyfive":
-  #          
-  #          h5ds = self._root._h5file[self._h5path]
-  #      else:
-  #          h5ds = self._root._h5file[self._h5path]
-            
-        return self._root._h5file[self._h5path]
+        try:
+            return self._cached_h5ds
+        except AttributeError:
+            h = self._root._h5file[self._h5path]
+            self._cached_h5ds = h
+            print ('Getting self._h5ds', repr(h))
+            return h
 
     @property
     def name(self):
@@ -199,19 +198,16 @@ class BaseVariable(BaseObject):
 
     def _lookup_dimensions(self):
         # Use cached attributes, if available.
-        try:
-            attrs = self._attrs
-            print ('cached_attrs')
-        except AttributeError:
-            attrs = self._h5ds.attrs
-            print ('BAD attr;')
-            
+        
+        # Get the original attributes
+        print ('_lookup_dimensions')            
+        attrs = self._h5ds.attrs
+
         # coordinate variable and dimension, eg. 1D ("time") or 2D string variable
-        print ('getting dimes')
         if (
             "_Netcdf4Coordinates" in attrs
-            and (attrs.get("CLASS", None) == b"DMENSION_SCALE"
-                 or self._parent.backend == "pyfive")
+#            and (attrs.get("CLASS", None) == b"DMENSION_SCALE"
+#                 or self._parent.backend == "pyfive")
         ):
             # Note: For the pyfive backend, if "_Netcdf4Coordinates"
             #       exist then we should use this method as it is much
@@ -220,16 +216,14 @@ class BaseVariable(BaseObject):
             # Use cached order_dims, if available.
             try:
                 order_dim = self._parent._order_dim
-                print ('cached_order_dim')
+                print ('using cache order_dims')
             except AttributeError:
-                print (22222000, list(self._parent._all_dimensions))
-                print ('------')
                 order_dim = {
                     value._dimid: key for key, value in self._parent._all_dimensions.items()
                 }
-                print (22222)
+                print ('Getting order_dim')
                 self._parent._order_dim = order_dim
-            print (11111)
+            print ('------')
             return tuple(
                 order_dim[coord_id] for coord_id in attrs["_Netcdf4Coordinates"]
             )
@@ -242,16 +236,18 @@ class BaseVariable(BaseObject):
                 # If a dimension has attached more than one scale for some reason, then
                 # take the last one. This is in line with netcdf-c and netcdf4-python.
                 print ('w/. LIST')
+                h5file =  self._root._h5file
                 return tuple(
-                    self._root._h5file[ref[-1]].name.split("/")[-1]
-                    for ref in list(self._h5ds.attrs.get("DIMENSION_LIST", []))
+                    h5file[ref[-1]].name.split("/")[-1]
+                    for ref in list(attrs.get("DIMENSION_LIST", []))
                 )
 
         # need to use the h5ds name here to distinguish from collision dimensions
+     
         child_name = self._h5ds.name.split("/")[-1]
         if child_name in self._parent._all_dimensions:
             return (child_name,)
-
+     
         dims = []
         phony_dims = defaultdict(int)
         for axis, dim in enumerate(self._h5ds.dims):
@@ -1325,7 +1321,7 @@ class File(Group):
         if backend == 'pyfive':
             
             self._h5py = pyfive
-            logging.info(f'h5netcdf running with {pyfive.__version__}')
+            logging.info(f"h5netcdf running with {pyfive.__version__}")
             try:
                 # We can ignore track order for now (and maybe for reading in general)?
                 if kwargs:
