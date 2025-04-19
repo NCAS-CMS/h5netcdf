@@ -752,13 +752,16 @@ class Group(Mapping):
             phony_dims = Counter()
 
         pyfive_backend = isinstance(self._h5group, pyfive.Group)
-        for k in self._h5group:
+
+        h5group = self._h5group
+        h5group._iii = False
+        for k in h5group:
             #with warnings.catch_warnings(record=True) as wlist:
             try:
-                v = self._h5group[k]
+                v = h5group[k]
             except Exception as e:
                 if pyfive_backend:
-                    warnings.warn(f'Skipping {k} - {e}')
+                    warnings.warn(f"Skipping {k} - {e}")
                     continue
                 else:
                     raise
@@ -789,10 +792,12 @@ class Group(Mapping):
                             self._variables.add(k)
                 except:
                     if pyfive_backend:
-                        warnings.warn(f'Cannot read {k}')
+                        warnings.warn(f"Cannot read {k}")
                     else:
                         raise
 
+        del h5group._iii
+            
         # iterate over found phony dimensions and create them
         if self._root._phony_dims_mode is not None:
             # retrieve labeled dims count from already acquired dimensions
@@ -1414,6 +1419,7 @@ class File(Group):
         # This maps keeps track of all HDF5 datasets corresponding to this group.
         self._all_h5groups = ChainMap(self._h5group)
         super().__init__(self, self._h5path)
+
         # get maximum dimension id and count of labeled dimensions
         if self._writable:
             self._max_dim_id = self._get_maximum_dimension_id()

@@ -144,7 +144,20 @@ class Dimension:
     def _h5ds(self):
         if self._phony:
             return None
-        return self._root._h5file[self._h5path]
+
+        try:
+            return self._cached_h5ds
+        except AttributeError:
+            h5file = self._root._h5file
+            h5file._iii = False
+            h = h5file[self._h5path]
+            del h5file._iii
+            self._cached_h5ds = h      
+            print ('Getting self._h5ds', repr(h))      
+            return h
+        
+
+#        return self._root._h5file[self._h5path]
 
     @property
     def _isscale(self):
@@ -152,21 +165,21 @@ class Dimension:
 
     @property
     def _dimid(self):
-#        if self._phony:
-#            return False
-#        return self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
-        try:
-            x =  self._cached_dimid
-            print ('using cached _dimid')
-            return x
-        except AttributeError:
-            if self._phony:
-                dimid =  False
-            else:
-                dimid = self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
-            print ('caching _dimid')
-            self._cached_dimid = dimid
-            return dimid
+        if self._phony:
+            return False
+        return self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
+#        try:
+#            x =  self._cached_dimid
+#            print ('using cached _dimid')
+#            return x
+#        except AttributeError:
+#            if self._phony:
+#                dimid =  False
+#            else:
+#                dimid = self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
+#            print ('caching _dimid')
+#            self._cached_dimid = dimid
+#            return dimid
             
 
     def _resize(self, size):
