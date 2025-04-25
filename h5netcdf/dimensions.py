@@ -142,22 +142,32 @@ class Dimension:
 
     @property
     def _h5ds(self):
+        # Note on caching:
+        #
+        # Caching the h5ds (as is done with `BaseObject._h5ds`) can
+        # give performance improvements, but causes as yet not
+        # understood problems in the case that there is a
+        # multidimensional variable for which one of its dimensions
+        # has the same name as the variable itself. For instance
+        # (taken from the `write_h5netcdf` function in the tests):
+        #
+        # dimensions:
+        #   z = 6 ;
+        #   string3 = 3 ;
+        #
+        # variables:
+        #   char z(z, string3) ;
+
         if self._phony:
             return None
 
-        try:
-            return self._cached_h5ds
-        except AttributeError:
-            h5file = self._root._h5file
-            h5file._iii = False
-            h = h5file[self._h5path]
-            del h5file._iii
-            self._cached_h5ds = h      
-            print ('Getting self._h5ds', repr(h))      
-            return h
-        
-
-#        return self._root._h5file[self._h5path]
+        # No need to build chunk index for a dimension (only affects
+        # the pyfive backend)
+        h5file = self._root._h5file
+        h5file._build_chunk_index = False
+        h = h5file[self._h5path]
+        del h5file._build_chunk_index
+        return h
 
     @property
     def _isscale(self):
@@ -168,26 +178,13 @@ class Dimension:
         if self._phony:
             return False
         return self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
-#        try:
-#            x =  self._cached_dimid
-#            print ('using cached _dimid')
-#            return x
-#        except AttributeError:
-#            if self._phony:
-#                dimid =  False
-#            else:
-#                dimid = self._h5ds.attrs.get("_Netcdf4Dimid", self._dimensionid)
-#            print ('caching _dimid')
-#            self._cached_dimid = dimid
-#            return dimid
-            
 
     def _resize(self, size):
         from .legacyapi import Dataset
 
         if not self.isunlimited():
             raise ValueError(
-                f"Dimension '{self.name}' is not unlimited and thus cannot be resized."
+                f"Dimension {self.name!r} is not unlimited and thus cannot be resized."
             )
         self._h5ds.resize((size,))
 
