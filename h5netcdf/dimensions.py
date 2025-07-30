@@ -105,17 +105,23 @@ class Dimension:
     @property
     def size(self):
         """Return dimension size."""
-        size = len(self)
-        if self.isunlimited():
-            # return actual dimensions sizes, this is in line with netcdf4-python
-            # get sizes from all connected variables and calculate max
-            # because netcdf unlimited dimensions can be any length
-            # but connected variables dimensions can have a certain larger length.
-            reflist = self._h5ds.attrs.get("REFERENCE_LIST", None)
-            if reflist is not None:
-                for ref, axis in reflist:
-                    var = self._parent._h5group["/"][ref]
-                    size = max(var.shape[axis], size)
+        try:
+            size = self._cached_size
+        except AttributeError:
+            size = len(self)
+            if not self.isunlimited():
+                self._cached_size = size
+            else:                
+                # return actual dimensions sizes, this is in line with netcdf4-python
+                # get sizes from all connected variables and calculate max
+                # because netcdf unlimited dimensions can be any length
+                # but connected variables dimensions can have a certain larger length.
+                reflist = self._h5ds.attrs.get("REFERENCE_LIST", None)
+                if reflist is not None:
+                    for ref, axis in reflist:
+                        var = self._parent._h5group["/"][ref]
+                        size = max(var.shape[axis], size)
+                
         return size
 
     def group(self):
@@ -124,15 +130,44 @@ class Dimension:
 
     def isunlimited(self):
         """Return ``True`` if dimension is unlimited, otherwise ``False``."""
-        if self._phony:
-            return False
-        return self._h5ds.maxshape == (None,)
+        try:
+            return self._cached_isunlimited
+        except AttributeError:
+            if self._phony:
+                return False
+
+            isunlimited = self._h5ds.maxshape == (None,)
+            self._cached_isunlimited = isunlimited
+            return isunlimited
 
     @property
     def _h5ds(self):
+        # Note on caching:
+        #
+        # Caching the h5ds (as is done with `BaseObject._h5ds`) can
+        # give performance improvements, but causes as yet not
+        # understood problems in the case that there is a
+        # multidimensional variable for which one of its dimensions
+        # has the same name as the variable itself. For instance
+        # (taken from the `write_h5netcdf` function in the tests):
+        #
+        # dimensions:
+        #   z = 6 ;
+        #   string3 = 3 ;
+        #
+        # variables:
+        #   char z(z, string3) ;
+
         if self._phony:
             return None
-        return self._root._h5file[self._h5path]
+
+        # No need to build chunk index for a dimension (only affects
+        # the pyfive backend)
+        h5file = self._root._h5file
+        h5file._build_chunk_index = False
+        h = h5file[self._h5path]
+        del h5file._build_chunk_index
+        return h
 
     @property
     def _isscale(self):
@@ -149,7 +184,7 @@ class Dimension:
 
         if not self.isunlimited():
             raise ValueError(
-                f"Dimension '{self.name}' is not unlimited and thus cannot be resized."
+                f"Dimension {self.name!r} is not unlimited and thus cannot be resized."
             )
         self._h5ds.resize((size,))
 

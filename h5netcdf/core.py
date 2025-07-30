@@ -140,7 +140,20 @@ class BaseObject:
     def _h5ds(self):
         # Always refer to the root file and store not h5py object
         # subclasses:
-        return self._root._h5file[self._h5path]
+        if "legacy" in self._cls_name:
+            # Haven't yet worked how to do caching with the legacy
+            # API (because as things stand we end up with
+            # recursion in HasAttributesMixin.__[gs]etattr__ when
+            # we try to get/set the _cached_h5ds attribute).
+            return self._root._h5file[self._h5path]
+
+        try:
+            # Try to get from cache
+            return self._cached_h5ds
+        except AttributeError:
+            h = self._root._h5file[self._h5path]
+            self._cached_h5ds = h
+            return h
 
     @property
     def name(self):
@@ -194,15 +207,38 @@ class BaseVariable(BaseObject):
         attrs = self._h5ds.attrs
         # coordinate variable and dimension, eg. 1D ("time") or 2D string variable
         if (
-            "_Netcdf4Coordinates" in attrs
-            and attrs.get("CLASS", None) == b"DIMENSION_SCALE"
+                "_Netcdf4Coordinates" in attrs
+                and (
+                    attrs.get("CLASS", None) == b"DIMENSION_SCALE"
+                    or self._parent.backend == "pyfive"
+                )
         ):
-            order_dim = {
-                value._dimid: key for key, value in self._parent._all_dimensions.items()
-            }
+            # Note: For the pyfive backend, if "_Netcdf4Coordinates"
+            #       exist then we should use this method as it is much
+            #       faster than using the DIMENSION_LIST method
+            try:
+                # Try using cached order_dim
+                if "legacy" in self._cls_name:
+                    # Haven't yet worked how to do caching with the
+                    # legacy API (because as things stand we end up
+                    # with recursion in
+                    # HasAttributesMixin.__[gs]etattr__ when we try to
+                    # get/set the _cached_h5ds attribute).
+                    raise AttributeError
+
+                order_dim = self._parent._cached_order_dim
+            except AttributeError:
+                order_dim = {
+                    value._dimid: key for key, value in self._parent._all_dimensions.items()
+                }
+                if "legacy" not in self._cls_name:
+                    # Cache order_dim
+                    self._parent._cached_order_dim = order_dim
+
             return tuple(
                 order_dim[coord_id] for coord_id in attrs["_Netcdf4Coordinates"]
             )
+
         # normal variable carrying DIMENSION_LIST
         # extract hdf5 file references and get objects name
         if "DIMENSION_LIST" in attrs:
@@ -210,12 +246,14 @@ class BaseVariable(BaseObject):
             if _unlabeled_dimension_mix(self._h5ds) == "labeled":
                 # If a dimension has attached more than one scale for some reason, then
                 # take the last one. This is in line with netcdf-c and netcdf4-python.
+                h5file =  self._root._h5file
                 return tuple(
                     self._root._h5file[ref[-1]].name.split("/")[-1]
-                    for ref in list(self._h5ds.attrs.get("DIMENSION_LIST", []))
+                    for ref in list(attrs.get("DIMENSION_LIST", []))
                 )
 
         # need to use the h5ds name here to distinguish from collision dimensions
+
         child_name = self._h5ds.name.split("/")[-1]
         if child_name in self._parent._all_dimensions:
             return (child_name,)
@@ -335,6 +373,7 @@ class BaseVariable(BaseObject):
         """Return variable dimension names."""
         if self._dimensions is None:
             self._dimensions = self._lookup_dimensions()
+
         return self._dimensions
 
     @property
@@ -723,14 +762,22 @@ class Group(Mapping):
         if self._root._phony_dims_mode is not None:
             phony_dims = Counter()
 
-        pyfive_backend = isinstance(self._h5group, pyfive.Group)
-        for k in self._h5group:
+        if isinstance(self._h5group, pyfive.Group):
+            self.backend = "pyfive"
+        else:
+            self.backend = "h5py"
+
+        # No need to build chunk index when building the File view
+        # (only affects the pyfive backend)
+        h5group = self._h5group
+        h5group._build_chunk_index = False
+        for k in h5group:
             #with warnings.catch_warnings(record=True) as wlist:
             try:
-                v = self._h5group[k]
+                v = h5group[k]
             except Exception as e:
-                if pyfive_backend:
-                    warnings.warn(f'Skipping {k} - {e}')
+                if  self.backend == "pyfive":
+                    warnings.warn(f"Skipping {k} - {e}")
                     continue
                 else:
                     raise
@@ -760,11 +807,54 @@ class Group(Mapping):
                         if isinstance(v, self._root._h5py.Dataset):
                             self._variables.add(k)
                 except:
-                    if pyfive_backend:
-                        warnings.warn(f'Cannot read {k}')
+                    if self.backend == "pyfive":
+                        warnings.warn(f"Cannot read {k}")
                     else:
                         raise
 
+        for k in h5group:
+            #with warnings.catch_warnings(record=True) as wlist:
+            try:
+                v = h5group[k]
+            except Exception as e:
+                if self.backend == "pyfive":
+                    warnings.warn(f"Skipping {k} - {e}")
+                    continue
+                else:
+                    raise
+
+            if isinstance(v, self._root._h5py.Group):
+                # add to the groups collection if this is a h5py(d) Group
+                # instance
+                self._groups.add(k)
+            # todo: add other user types here
+            elif isinstance(
+                v, self._root._h5py.Datatype
+            ) and self._root._h5py.check_enum_dtype(v.dtype):
+                self._enumtypes.add(k)
+            else:
+                try:
+                    if v.attrs.get("CLASS") == b"DIMENSION_SCALE":
+                        # add dimension and retrieve size
+                        self._dimensions.add(k)
+                    else:
+                        if self._root._phony_dims_mode is not None:
+                            # check if malformed variable and raise
+                            if _unlabeled_dimension_mix(v) == "unlabeled":
+                                # if unscaled variable, get phony dimensions
+                                phony_dims |= Counter(v.shape)
+
+                    if not _netcdf_dimension_but_not_variable(v):
+                        if isinstance(v, self._root._h5py.Dataset):
+                            self._variables.add(k)
+                except:
+                    if self.backend == "pyfive":
+                        warnings.warn(f"Cannot read {k}")
+                    else:
+                        raise
+
+        del h5group._build_chunk_index
+            
         # iterate over found phony dimensions and create them
         if self._root._phony_dims_mode is not None:
             # retrieve labeled dims count from already acquired dimensions
@@ -1071,6 +1161,7 @@ class Group(Mapping):
 
             if fillvalue is None and isinstance(self._parent._root, Dataset):
                 fillvalue = _get_default_fillvalue(dtype)
+
             return self._root.create_variable(
                 name[1:],
                 dimensions,
@@ -1088,6 +1179,7 @@ class Group(Mapping):
         group = self
         for k in keys[:-1]:
             group = group._require_child_group(k)
+            
         return group._create_child_variable(
             keys[-1],
             dimensions,
@@ -1293,7 +1385,7 @@ class File(Group):
         if backend == 'pyfive':
             
             self._h5py = pyfive
-            logging.info(f'h5netcdf running with {pyfive.__version__}')
+            logging.info(f"h5netcdf running with {pyfive.__version__}")
             try:
                 # We can ignore track order for now (and maybe for reading in general)?
                 if kwargs:
@@ -1386,6 +1478,7 @@ class File(Group):
         # This maps keeps track of all HDF5 datasets corresponding to this group.
         self._all_h5groups = ChainMap(self._h5group)
         super().__init__(self, self._h5path)
+
         # get maximum dimension id and count of labeled dimensions
         if self._writable:
             self._max_dim_id = self._get_maximum_dimension_id()
